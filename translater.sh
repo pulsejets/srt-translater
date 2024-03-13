@@ -111,7 +111,28 @@ iso639["uk"]="ukr";iso639["ur"]="urd";iso639["uz"]="uzb";iso639["ve"]="ven";iso6
 iso639["vo"]="vol";iso639["cy"]="wel";iso639["wa"]="wln";iso639["wo"]="wol";iso639["xh"]="xho";
 iso639["yi"]="yid";iso639["yo"]="yor";iso639["za"]="zha";
 
+urlencode() {
+    # Usage: urlencode "string"
+    local string="$1"
+    local length="${#string}"
+    local urlencoded=""
+    local c
 
+    for (( i = 0; i < length; i++ )); do
+        c="${string:i:1}"
+        case $c in
+            [a-zA-Z0-9.~_-]) urlencoded+="$c" ;;
+            *) printf -v c '%%%02X' "'$c"; urlencoded+="$c" ;;
+        esac
+    done
+
+    echo "$urlencoded"
+}
+
+# echo "http://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hu&dt=t&q=-What on earth?"
+# translated_line=$(wget -U "Mozilla/5.0" -q -O- "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hu&dt=t&q=-$(urlencode "What on earth?")"  | jq -r '.[0][0][0]')
+# echo $translated_line
+# exit 0;
 
 SECONDS=0
 file=""
@@ -365,6 +386,21 @@ function drawProgressBar() {
     echo -ne "[${bar}${spaces}] ${progress}/${total}\r"
     }
 
+convert_and_trim() {
+    # Convert translated_line to Unicode
+    unicode_line=$(echo -e "$1" | iconv -f utf-8 -t utf-8 -c)
+
+    # Remove unwanted characters like �FF1
+    cleaned_line=$(echo "$unicode_line" | sed 's/�FF1//g')
+
+    # Remove empty lines
+    cleaned_line=$(echo "$cleaned_line" | sed '/^\s*$/d')
+
+    # Trim whitespace from both ends
+    trimmed_line=$(echo -n "$cleaned_line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    echo "$trimmed_line"
+}
 
 function Translate() {
    
@@ -403,27 +439,43 @@ function Translate() {
         echo "https://github.com/pulsejets/srt-translator"  >> "$temp_srt_file"
         echo "" >> "$temp_srt_file"
      fi
-     echo
+
     while IFS= read -r line; do
         if [[ $line =~ ^[0-9][^:]*$  ]]; then
             subtitle_id="$line" 
-            #debug "subtitle_id =$subtitle_id"
+            debug "subtitle_id =$subtitle_id"
     	    continue
         elif [[ $line =~ ^[0-9][0-9]:[0-9][0-9] ]]; then
             timestamp="$line"
-	        # debug "timestamp=$timestamp"
+	        debug "timestamp=$timestamp"
             continue
         elif [[ $line != "" ]]; then
-        
+            
+            if [[ -z $timestamp ]]; then
+                # If timestamp is empty, calculate the new timestamp
+                # Convert the previous timestamp to seconds
+                IFS=:, read -r hours minutes seconds milliseconds <<< "00:00:00,000"
+                total_seconds=$((10#$hours*3600 + 10#$minutes*60 + 10#$seconds))
+                # Add one second
+                total_seconds=$((total_seconds + 1))
+                # Convert the total seconds back to the timestamp format
+                hours=$((total_seconds / 3600))
+                minutes=$(( (total_seconds % 3600) / 60 ))
+                seconds=$((total_seconds % 60))
+                timestampstr=$(printf "%02d:%02d:%02d,%03d" "$hours" "$minutes" "$seconds" "$milliseconds")
+                timestamp="$timestampstr --> $timestampstr"
+            fi
+
             sl=${#line}
 
             if [ "$sl" != 1 ]; then
             
                 ((progress=progress+1))
                 drawProgressBar "$progress" "$total_lines"
-                #debug "http://translate.googleapis.com/translate_a/single?client=gtx&sl=$source_language&tl=$target_language&dt=t&q=$line"
-                translated_line=$(wget -U "Mozilla/5.0" -q -O- "http://translate.googleapis.com/translate_a/single?client=gtx&sl=$source_language&tl=$target_language&dt=t&q=$line"  | jq -r '.[0][0][0]')
-                
+                #debug "http://translate.googleapis.com/translate_a/single?client=gtx&sl=$source_language&tl=$target_language&dt=t&q=$(urlencode "$line")"
+                translated_line=$(wget -U "Mozilla/5.0" -q -O- "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source_language&tl=$target_language&dt=t&q=$(urlencode "$line")"  | jq -r '.[0][0][0]')
+                translated_line=$(convert_and_trim "$translated_line")
+
                 if [ "$pre_subtitle_id" = "$subtitle_id" ];then 
                     echo "$translated_line" >> "$temp_srt_file"
                 else     
